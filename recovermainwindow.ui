@@ -43,7 +43,7 @@ After that, we can figure out the pattern so accelerate the search.</string>
      </widget>
     </item>
     <item>
-     <widget class="QWidget" name="widget" native="true">
+     <widget class="QWidget" name="toolbarWidget" native="true">
       <layout class="QHBoxLayout" name="horizontalLayout">
        <property name="spacing">
         <number>2</number>

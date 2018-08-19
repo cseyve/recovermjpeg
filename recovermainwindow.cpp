@@ -31,7 +31,26 @@
 #include <QTimer>
 #include <QMessageBox>
 
+#include <assert.h>
+
+/// \brief Global log level for this file
 te_log_level g_log_level = LOG_INFO;
+
+
+
+const char * c_log_descr[] = {
+	"CRITICAL",
+	"ERROR",
+	"WARNING",
+	"INFO",
+	"DEBUG",
+	"TRACE"
+};
+
+const char * log_descr(int lvl) {
+	assert(lvl < 6);
+	return c_log_descr[lvl];
+}
 
 /******************************************************************************
  *
@@ -55,6 +74,13 @@ void RecoverExtractor::init() {
 	mImageSize = 0;
 	mStatus = tr("Init");
 	mBufferMaxLen = MAX_JPEG_LEN;
+	mBufferRaw = NULL;
+	mDoubleJpegBuffer[0] = NULL;
+	mDoubleJpegBuffer[1] = NULL;
+	mDoubleJpegBufferSize[0] = 0;
+	mDoubleJpegBufferSize[1] = 0;
+	mDoubleJpegBufferIndex = 0;
+
 	mProgress = 0;
 
 	memset(mTag, 0, sizeof(uint8_t) * 5);
@@ -65,6 +91,13 @@ void RecoverExtractor::purge() {
 	mProgress = 100;
 
 	CPP_DELETE_ARRAY(mBufferRaw);
+	mBufferMaxLen = 0;
+
+	CPP_DELETE_ARRAY(mDoubleJpegBuffer[0]);
+	CPP_DELETE_ARRAY(mDoubleJpegBuffer[1]);
+	mDoubleJpegBufferSize[0] = 0;
+	mDoubleJpegBufferSize[1] = 0;
+
 	if(mFile.isOpen()) {
 		mFile.close();
 	}
@@ -127,6 +160,7 @@ void RecoverMainWindow::on_openButton_clicked()
 
 void RecoverMainWindow::on_stepButton_clicked()
 {
+	ui->toolbarWidget->setEnabled(false);
 	bool ok = mRecoverExtractor.extract();
 	if(!ok) {
 		QMessageBox::warning(this, tr("Read image failed"), mRecoverExtractor.getStatus());
@@ -140,6 +174,7 @@ void RecoverMainWindow::on_stepButton_clicked()
 			QTimer::singleShot(100, this, SLOT(on_stepButton_clicked()));
 		}
 	}
+	ui->toolbarWidget->setEnabled(true);
 
 	QString status = mRecoverExtractor.getStatus();
 	ui->debugLabel->setText(status);
@@ -168,11 +203,16 @@ bool RecoverExtractor::extract() {
 			CPP_DELETE_ARRAY(mBufferRaw);
 		}
 	}
+	if(!mDoubleJpegBuffer[0]) {
+		for(int i = 0; i<2; ++i) {
+			CPP_ALLOC_ARRAY(mDoubleJpegBuffer[i], unsigned char, mBufferMaxLen);
+		}
+	}
 
 	if(mBufferRaw) {
 		bool ok = mFile.seek(mLastPosition);
+		mProgress = (int)(0.5f + 100.f *float(mFile.pos()) / float(mFile.size()));
 		int readBytes = mFile.read((char *)mBufferRaw, mBufferMaxLen);
-		mProgress = (int)(0.5 + 100. * mFile.pos() / mFile.size());
 		if(!ok || readBytes <= 0) {
 			mStatus = tr("Read failed for pos=")
 					+ QString::number(mLastPosition)
@@ -195,6 +235,7 @@ bool RecoverExtractor::extract() {
 		// Decode image
 		QImage loadImage;
 
+
 		MSG_PRINT(LOG_DEBUG, "Starting at mLastPosition=%d Index=%d "
 							 "MinStepSize=%d read=%d tag='%s'",
 				  mLastPosition,
@@ -206,6 +247,12 @@ bool RecoverExtractor::extract() {
 		// so the jpeg buffer might be found
 		bool foundit = false;
 		int found_at = 0;
+
+		/***********************************************************************
+		 *
+		 * First pass, w edon't know the tag, so we do tiny steps of 1 byte
+		 *
+		 **********************************************************************/
 		if(mImageIndex < 2 || mTag32==0 || mBufferMaxLen <= 0) { // we don't know the tag, we check all positions
 			int offset = 0;
 			for(; !foundit && offset < readBytes-1000; offset++) {
@@ -243,9 +290,13 @@ bool RecoverExtractor::extract() {
 					mTag32 = 0; // So the search won't be accelerated
 				}
 			}
-
-
 		} else {
+			/***********************************************************************
+			 *
+			 * Accelerated pass, we already know the tag, so we look for it first
+			 * then we check if te
+			 *
+			 **********************************************************************/
 			int offset = 0;
 			MSG_PRINT(LOG_DEBUG, "Using accelerated from %d, read=%d", mLastPosition, readBytes);
 			for( ; !foundit && offset < readBytes-1000; offset++) {
@@ -285,25 +336,50 @@ bool RecoverExtractor::extract() {
 				}
 			}
 		}
+
+
+
 		if(!foundit) {
+			// No JPEG has been found => maybe it's the end of file ?
 			if(mFile.atEnd()) {
 				mStatus = tr("End of file, finished");
+
+				// Save last image
+				// We need to update the data, but the image is already in buffer,
+				// the writing is FoundAt (current) + previous increment
+				// let's overwrite them
+				int current_image = mDoubleJpegBufferIndex%2;
+				int previous_image = (mDoubleJpegBufferIndex + 1)%2;
+				mDoubleJpegBufferIncrement[previous_image] = 0;
+				mDoubleJpegBufferFoundAt[current_image] = (mDoubleJpegBufferLastSize * 1.1f); // 10% margin
+				mImageIndex++;
+				//mDoubleJpegBufferIndex++; // to invert current and previous
+				savePreviousImage();
+
 				return true;
+			}
+			else {
+				MSG_PRINT(LOG_ERROR, "No JPEG found, though it's not the end of file");
 			}
 
 			mStatus = tr("No jpeg found here");
 			return false;
 		} else {
-			MSG_PRINT(LOG_TRACE, "   => Found it at %d", mLastPosition + found_at);
+			MSG_PRINT(LOG_DEBUG, "   => Found it at %d for ImageIndex=%d", mLastPosition + found_at, mImageIndex);
 
-			// JPEG was found a
+			// JPEG was found at byte # found_at from the beginning of the buffer
 			mLastPosition += found_at;
+
+			// for the next iteration, we will jump to this position + a margin, to not read the same image again
+			int increment = found_at;
 
 			if(mImageIndex == 1) {
 				// once we are on the second image, wa know the size of the first image, so
 				// so we can adapt the step to not read
 				mImageSize = mLastPosition * 0.75f; // 3/4 of image size is the new increment
 			//	mBufferMaxLen = std::min(MAX_JPEG_LEN, (int)(mLastPosition * 2.5f));
+			} else {
+
 			}
 
 
@@ -336,25 +412,80 @@ bool RecoverExtractor::extract() {
 						(float) mLastPosition / (1024.f*1024.f));
 
 			// add an offset so we don't read again the same image
+			int margin;
 			if(mImageIndex <= 2) {
-				mLastPosition += 10000; // min image size 200 kB for 2K video
+				margin= 10000; // min image size 200 kB for 2K video
 			} else {
-				mLastPosition += mImageSize;
+				margin = mImageSize;
 			}
+			increment += margin;
+			mLastPosition += margin;
+
 			mStatus = str;
 
 			mLoadImage = loadImage.copy();
 
+			// Save buffer for next time
+			if(mDoubleJpegBuffer[0] && mDoubleJpegBuffer[1]) // alloc was fine, we can work with those buffers
+			{
+				/*
+				 *
+				 * Previous iteration
+				 *
+				 *
+				 * Raw [----------------xJpegStart---------------(end somewhere)-------------] MaxLength
+				 *                      | found_at
+				 *                      <- increment -> x next fseek=found_at+increment
+				 * => we copy in the double buffer, the raw buffer from found_at to the end.
+				 *                      <--- copied in double budder ----------------------->
+				 *
+				 * next iteration: we jump in file by the increment,
+				 * so the file pointer is at previous jpeg + increment
+				 * the previous buffer contains the JPEG and some garbage
+				 * At this iteration, we find the new found_at
+				 *
+				 * Raw [-----------xJpegStart---------------(end somewhere)-------------] MaxLength
+				 *                 | found_at(N)
+				 *
+				 * So the size of the JPEG is the curret found_at + size of previous increment
+				 *
+				 */
 
-			QString recoveredImageName;
-			recoveredImageName.sprintf("REC_%04d.jpg", mImageIndex);
-			MSG_PRINT(LOG_DEBUG, "Saving '%s'", qPrintable(recoveredImageName));
+				int current_index = mDoubleJpegBufferIndex%2;
+				int previous_index = (mDoubleJpegBufferIndex+1)%2;
+				mDoubleJpegBufferSize[current_index] = mBufferMaxLen - found_at;
+				mDoubleJpegBufferIncrement[current_index] = increment;
+				mDoubleJpegBufferFoundAt[current_index] = found_at;
 
-			QString imageFile = mDir.absoluteFilePath(recoveredImageName);
-			ok = loadImage.save(imageFile, "JPG", 92);
-			if(!ok) {
-				mStatus = tr("Cannot save image ") + imageFile;
+				memcpy( mDoubleJpegBuffer[current_index],
+						mBufferRaw + found_at,
+						mDoubleJpegBufferSize[current_index] );
+
+				mDoubleJpegBufferLastSize = found_at + mDoubleJpegBufferIncrement[previous_index];
+
+				// Save current buffer
+				savePreviousImage();
+
+				mDoubleJpegBufferIndex++;
+
+
+			} else {
+				QString recoveredImageName;
+				recoveredImageName.sprintf("REC_%04d.jpg", mImageIndex);
+				MSG_PRINT(LOG_DEBUG, "Saving '%s'", qPrintable(recoveredImageName));
+
+				QString imageFile = mDir.absoluteFilePath(recoveredImageName);
+
+				// Stupid version: re-encode the JPEG file.
+				ok = loadImage.save(imageFile, "JPG", 92);
+				if(!ok) {
+					mStatus = tr("Cannot save image ") + imageFile;
+				}
 			}
+			// Try smarter: save the buffer, even if we save a few unused bytes
+			// from the MJPEG encapsulation
+
+
 			return ok;
 		}
 	}
@@ -363,13 +494,56 @@ bool RecoverExtractor::extract() {
 	return false;
 }
 
+int RecoverExtractor::savePreviousImage()
+{
+	int current_index = mDoubleJpegBufferIndex%2;
+	int previous_index = (mDoubleJpegBufferIndex+1)%2;
+
+	// Save previous one
+	QString recoveredImageName;
+	recoveredImageName.sprintf("REC_%04d.jpg", mImageIndex-1);
+	MSG_PRINT(LOG_DEBUG, "Saving buffered [prev=%d] {maxSize=%d, increment was %d, new found_at=%d} in '%s'",
+			  previous_index,
+			  mDoubleJpegBufferSize[previous_index],
+			  mDoubleJpegBufferIncrement[previous_index],
+			  mDoubleJpegBufferFoundAt[current_index],
+			  qPrintable(recoveredImageName));
+
+	QString imageFile = mDir.absoluteFilePath(recoveredImageName);
+	if(mDoubleJpegBufferSize[previous_index] > 0) {
+		FILE * f = fopen(qPrintable(imageFile), "wb");
+		if(!f) {
+			MSG_PRINT(LOG_ERROR, "Can't open file '%s' for writing ImageIndex %d",
+					  qPrintable(imageFile),
+					  mImageIndex);
+			return -1;
+		} else {
+			// Save adapted buffer, we now know where is the next image
+			MSG_PRINT(LOG_DEBUG, "Saving previous buffer = buffer [%d] of size %d limited by new found_at+prev_increment=%d",
+					  previous_index,
+					  mDoubleJpegBufferSize[previous_index],
+					  mDoubleJpegBufferFoundAt[current_index] + mDoubleJpegBufferIncrement[previous_index]
+					  );
+			fwrite(mDoubleJpegBuffer[previous_index], 1,
+				   mDoubleJpegBufferFoundAt[current_index] + mDoubleJpegBufferIncrement[previous_index],
+				   f);
+			fclose(f);
+		}
+	} else {
+		if(mImageIndex>0) {
+			MSG_PRINT(LOG_ERROR, "0 size buffer for ImageIndex %d", mImageIndex);
+			return -1;
+		}
+	}
+	return 0;
+}
 
 
 
 
 void registerAlloc(const char * file, const char *func, int line,
 				   void * buf, size_t size) {
-	fprintf(stderr, "%s:%s:%d: allocate %p / %u bytes", file, func, line, buf, size);
+	fprintf(stderr, "%s:%s:%d: allocate %p / %zu bytes", file, func, line, buf, size);
 }
 
 void registerDelete(const char * file, const char *func, int line,

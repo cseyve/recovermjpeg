@@ -39,12 +39,15 @@ typedef enum {
 	LOG_WARNING,
 	LOG_INFO,
 	LOG_DEBUG,
-	LOG_TRACE
+	LOG_TRACE,
+	LOG_MAX
 } te_log_level;
+
+const char * log_descr(int lvl);
 
 extern te_log_level g_log_level;
 #define MSG_PRINT(_lvl, ...)	do { if((_lvl) <= g_log_level) { \
-									fprintf(stdout, "%s:%d: ", __func__, __LINE__); \
+									fprintf(stdout, "[%s] %s:%d: ", log_descr((_lvl)), __func__, __LINE__); \
 									fprintf(stdout, __VA_ARGS__); fprintf(stdout, "\n"); fflush(stdout); \
 								}} while(0)
 
@@ -130,8 +133,32 @@ private:
 	/// \brief Reading buffer
 	uint8_t * mBufferRaw;
 
+	/*! \brief Double buffer for the raw JPEG
+		We need to store the buffer because we need to find the next image
+		before saving the original JPEG file.
+	  */
+	uint8_t * mDoubleJpegBuffer[2];
+
+	/*! \brief Size of the block copied at last iteration */
+	int mDoubleJpegBufferSize[2];
+
+	/*! \brief Last size of the jpeg, used to save at end of file */
+	int mDoubleJpegBufferLastSize;
+
+
+	/*! \brief Size of the previous file pointer increment at last iteration */
+	int mDoubleJpegBufferIncrement[2];
+	/*! \brief JPEG position in buffer */
+	int mDoubleJpegBufferFoundAt[2];
+
+	/// \brief Index of the current buffer
+	int mDoubleJpegBufferIndex;
+
 	/// \brief Size of buffer read iteration
 	int mBufferMaxLen;
+
+	/*! \brief Save the image in buffer */
+	int savePreviousImage();
 
 	QFile mFile;		///< Current file, once open
 	uint8_t mTag[5];	///< 4 first chars of the searched JPEG buffer
