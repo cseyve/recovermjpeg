@@ -164,16 +164,17 @@ void RecoverMainWindow::on_stepButton_clicked()
 	bool ok = mRecoverExtractor.extract();
 	if(!ok) {
 		QMessageBox::warning(this, tr("Read image failed"), mRecoverExtractor.getStatus());
-	} else {
-		QPixmap pixmap = QPixmap::fromImage(mRecoverExtractor.getImage().scaled(ui->imageLabel->width(),
-																				ui->imageLabel->height(),
-																				Qt::KeepAspectRatio));
+    } else {
+        QPixmap pixmap = QPixmap::fromImage(mRecoverExtractor.getImage().scaled(ui->imageLabel->width(),
+                                                                                ui->imageLabel->height(),
+                                                                                Qt::KeepAspectRatio));
 
-		ui->imageLabel->setPixmap(pixmap);
-		if(ui->goOnCheckBox->isChecked()) {
-			QTimer::singleShot(100, this, SLOT(on_stepButton_clicked()));
-		}
-	}
+        ui->imageLabel->setPixmap(pixmap);
+        if(mRecoverExtractor.getProgress() < 100
+                && ui->goOnCheckBox->isChecked() ) {
+            QTimer::singleShot(100, this, SLOT(on_stepButton_clicked()));
+        }
+    }
 	ui->toolbarWidget->setEnabled(true);
 
 	QString status = mRecoverExtractor.getStatus();
@@ -237,11 +238,11 @@ bool RecoverExtractor::extract() {
 
 
 		MSG_PRINT(LOG_DEBUG, "Starting at mLastPosition=%d Index=%d "
-							 "MinStepSize=%d read=%d tag='%s'",
+                             "MinStepSize=%d read=%d tag='0x%02x 0x%02x 0x%02x 0x%02x'",
 				  mLastPosition,
 				  mImageIndex, mImageSize,
 				  readBytes,
-				  mTag);
+                  mTag[0], mTag[1], mTag[2], mTag[3]);
 
 		// We try to skip the start of the file to avoid the magic number
 		// so the jpeg buffer might be found
@@ -272,21 +273,14 @@ bool RecoverExtractor::extract() {
 			}
 			// At second, we check if it's the same so we can accelerate the search
 			else if(mImageIndex >= 1) {
-				uint8_t tag[4];
-				tag[0] = mBufferRaw[found_at + 0];
-				tag[1] = mBufferRaw[found_at + 1];
-				tag[2] = mBufferRaw[found_at + 2];
-				tag[3] = mBufferRaw[found_at + 3];
 				uint32_t tag32 = *(uint32_t *)(mBufferRaw + found_at);
 
-				MSG_PRINT(LOG_DEBUG, "Current header: 1st=0x%04x='%s' =? cur=0x%04x='%s'",
-						  mTag32, mTag, tag32, tag
-						  );
+                MSG_PRINT(LOG_DEBUG, "Current header: 1st=0x%04x =? cur=0x%04x",
+                          mTag32, tag32);
 
 				if(tag32 != mTag32) {
 					MSG_PRINT(LOG_ERROR, "Not constant header: 1st=0x%04x != 2nd=0x%04x",
-							  mTag32, tag32
-							  );
+                              mTag32, tag32);
 					mTag32 = 0; // So the search won't be accelerated
 				}
 			}
@@ -323,17 +317,23 @@ bool RecoverExtractor::extract() {
 					}
 				}
 			}
-			// if not found, try the not accelerated version
+
+            // if not found, try the not accelerated version
 			if(!foundit) {
 				MSG_PRINT(LOG_WARNING, "Cannot find JPEG with accelerated tag=0x%04x, revert to normal", mTag32);
 				mTag32 = 0;
 				offset = 0;
-				for(; !foundit && offset < readBytes-1000; offset++) {
-					foundit = loadImage.loadFromData(mBufferRaw+offset, readBytes-offset, "JPG");
-				}
+                for(; !foundit && offset < readBytes-1000; offset++) {
+                    foundit = loadImage.loadFromData(mBufferRaw+offset, readBytes-offset, "JPG");
+                    if(foundit) {
+                        found_at = offset;
+                    }
+                }
 				if(foundit) {
 					MSG_PRINT(LOG_INFO, "Failback to normal=> found at %d", mLastPosition+offset);
-				}
+                } else {
+                    MSG_PRINT(LOG_INFO, "Not found => EOF=%c", mFile.atEnd()?'T':'F');
+                }
 			}
 		}
 
@@ -343,6 +343,9 @@ bool RecoverExtractor::extract() {
 			// No JPEG has been found => maybe it's the end of file ?
 			if(mFile.atEnd()) {
 				mStatus = tr("End of file, finished");
+                MSG_PRINT(LOG_INFO, "END OF FILE => SAVE LAST");
+
+                mProgress = 100;
 
 				// Save last image
 				// We need to update the data, but the image is already in buffer,
@@ -389,7 +392,7 @@ bool RecoverExtractor::extract() {
 					  mImageIndex,
 					  mLastPosition);
 
-			MSG_PRINT(LOG_DEBUG, "    => Found JPG #%d at offset=%d buffer=%x%x%x%x JFIF='%c%c%c%c' tag='%c%c%c%c'",
+            MSG_PRINT(LOG_DEBUG, "    => Found JPG #%d at offset=%d buffer=%x%x%x%x JFIF='0x%02x 0x%02x 0x%02x 0x%02x' tag='0x%02x 0x%02x 0x%02x 0x%02x'",
 					  mImageIndex,
 					  mLastPosition,
 					  mBufferRaw[found_at+0],
@@ -400,10 +403,7 @@ bool RecoverExtractor::extract() {
 					  mBufferRaw[found_at+1]<' '?'x' : *(char *)&mBufferRaw[found_at+1],
 					  mBufferRaw[found_at+2]<' '?'x' : *(char *)&mBufferRaw[found_at+2],
 					  mBufferRaw[found_at+3]<' '?'x' : *(char *)&mBufferRaw[found_at+3],
-					  mTag[0]<' '?'x' : *(char *)&mTag[0],
-					  mTag[1]<' '?'x' : *(char *)&mTag[1],
-					  mTag[2]<' '?'x' : *(char *)&mTag[2],
-					  mTag[3]<' '?'x' : *(char *)&mTag[3]
+                      mTag[0], mTag[1], mTag[2], mTag[3]
 					  );
 
 			QString str;
@@ -540,14 +540,16 @@ int RecoverExtractor::savePreviousImage()
 
 
 
-
+static bool s_debug_alloc = false;
 void registerAlloc(const char * file, const char *func, int line,
 				   void * buf, size_t size) {
-	fprintf(stderr, "%s:%s:%d: allocate %p / %zu bytes", file, func, line, buf, size);
+    if(!s_debug_alloc) { return; }
+    fprintf(stderr, "%s:%s:%d: allocate %p / %zu bytes\n", file, func, line, buf, size);
 }
 
 void registerDelete(const char * file, const char *func, int line,
 					void * buf) {
-	fprintf(stderr, "%s:%s:%d: delete %p", file, func, line, buf);
+    if(!s_debug_alloc) { return; }
+    fprintf(stderr, "%s:%s:%d: delete %p\n", file, func, line, buf);
 }
 
