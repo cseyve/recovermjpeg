@@ -110,6 +110,13 @@ void RecoverExtractor::setFilename(const QString & filename) {
 	mFilename = filename;
 	QFileInfo fi(mFilename);
 	mDir = fi.absoluteDir();
+
+    // Create the subdir
+    mDir.mkdir(fi.baseName());
+    mDir.cd(fi.baseName());
+
+    QString ExportDir = mDir.absolutePath();
+    MSG_PRINT(LOG_INFO, "Saving images in '%s'", qPrintable(ExportDir));
 }
 
 /******************************************************************************
@@ -194,7 +201,6 @@ bool RecoverExtractor::extract() {
 		mFile.setFileName(mFilename);
 		if(mFile.open(QFile::ReadOnly)) {
 			QFileInfo fi(mFilename);
-			mDir = fi.absoluteDir();
 
 			if(mFile.size() == 0) {
 				mStatus = tr("Empty file ") + mFilename;

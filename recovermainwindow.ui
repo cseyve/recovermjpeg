@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>445</width>
-    <height>335</height>
+    <width>560</width>
+    <height>426</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -79,6 +79,12 @@ After that, we can figure out the pattern so accelerate the search.</string>
        </item>
        <item>
         <widget class="QCheckBox" name="goOnCheckBox">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
          <property name="toolTip">
           <string>At each image found, search for next until the end of file</string>
          </property>
@@ -94,20 +100,20 @@ After that, we can figure out the pattern so accelerate the search.</string>
          </property>
         </widget>
        </item>
-       <item>
-        <widget class="QLabel" name="debugLabel">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="text">
-          <string/>
-         </property>
-        </widget>
-       </item>
       </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="debugLabel">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="text">
+       <string/>
+      </property>
      </widget>
     </item>
     <item>
