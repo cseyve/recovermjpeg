@@ -24,7 +24,7 @@
 #include <QSettings>
 #include <QImage>
 #include <QPixmap>
-#include <QFileDialog>
+#include <QFileDialog>r
 #include <QFile>
 #include <QFileInfo>
 #include <QByteArray>

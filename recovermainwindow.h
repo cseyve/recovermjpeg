@@ -119,7 +119,7 @@ private:
 	QString mStatus;
 
 	/// \brief Last position in file, for reading next frame
-	int mLastPosition;
+    qint64 mLastPosition;
 
 	/// \brief Progress in %
 	int mProgress;
